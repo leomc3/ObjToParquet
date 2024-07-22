@@ -1,2 +1,2 @@
 # ObjToParquet
-Cast Object to Parquet data to read on Tablo.
+Cast Object dynamic to Parquet data to read on Tableau.
