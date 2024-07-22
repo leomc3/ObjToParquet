@@ -5,3 +5,5 @@
 /.vs
 /.obj
 /.bin
+/bin/x64/Debug/net8.0
+/obj
