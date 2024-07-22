@@ -23,9 +23,11 @@ namespace ObjToParquet
 
             return columns;
         }
-        public static Array DynamicCastListToArray3(IEnumerable<object> list, Type targetType, bool isNullable)
+
+        public static Array DynamicCastListToArray(IEnumerable<object> list, Type targetType, bool isNullable)
         {
             if (isNullable)
+            {
                 targetType = targetType switch
                 {
                     Type t when t == typeof(DateTime) => typeof(DateTime?),
@@ -34,29 +36,21 @@ namespace ObjToParquet
                     Type t when t == typeof(decimal) => typeof(decimal?),
                     _ => throw new NotSupportedException($"Tipo de dado {targetType} não suportado.")
                 };
-
-            // Handle nullable types
-            Type underlyingType = Nullable.GetUnderlyingType(targetType) ?? targetType;
-
-            // Create a generic List of the target type
-            var listType = typeof(List<>).MakeGenericType(targetType);
-            var castedList = (IList)Activator.CreateInstance(listType);
-
-            // Use reflection to get the Add method of the generic List
-            var addMethod = listType.GetMethod("Add");
-
-            // Cast each item in the list and add it to the castedList
-            foreach (var item in list)
-            {
-                object castedItem = item == null ? null : Convert.ChangeType(item, underlyingType);
-                addMethod.Invoke(castedList, new object[] { castedItem });
             }
 
-            // Convert the list to an array
-            var toArrayMethod = typeof(Enumerable).GetMethod("ToArray").MakeGenericMethod(targetType);
-            return (Array)toArrayMethod.Invoke(null, new object[] { castedList });
+            Type underlyingType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+            var castedList = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(targetType));
+            var addMethod = castedList.GetType().GetMethod("Add");
+
+            foreach (var item in list)
+            {
+                addMethod.Invoke(castedList, new object[] { item == null ? null : Convert.ChangeType(item, underlyingType) });
+            }
+
+            return castedList.GetType().GetMethod("ToArray").Invoke(castedList, null) as Array;
         }
-        public static List<DataField> ConvertToColum<T>(List<T> file)
+
+        public static List<DataField> ConvertToColumns<T>(List<T> file)
         {
             List<DataField> ret = new List<DataField>();
             Type type = file.FirstOrDefault().GetType();
@@ -95,60 +89,52 @@ namespace ObjToParquet
 
         public static bool EscreveArquivoParquet<T>(List<T> file, string dirNameParque)
         {
-            var retorno = false;
-
-            var arrColum = ConvertToColum<T>(file).OrderBy(x => x.Name).ToArray();
-
-            //var schema = new ParquetSchema(arrColum[0..9]); 
-            var schema = new ParquetSchema(arrColum);
-            var arrDataColum = new List<DataColumn>();
+            var schema = new ParquetSchema(ConvertToColumns(file).OrderBy(x => x.Name).ToArray());
             var dicCol = GetColumns(file);
 
-            foreach (var item in schema.DataFields)
+            var arrDataColum = schema.DataFields.Select(item =>
             {
                 var data = dicCol[item.Name];
-                var castedList = DynamicCastListToArray3(data, item.ClrType, item.IsNullable);
-                arrDataColum.Add(new DataColumn(
-                item,
-                castedList));
-            }
+                var castedList = DynamicCastListToArray(data, item.ClrType, item.IsNullable);
+                return new DataColumn(item, castedList);
+            }).ToList();
 
-            if (!Directory.Exists(Path.GetDirectoryName(dirNameParque)))
-                Directory.CreateDirectory(Path.GetDirectoryName(dirNameParque));
-
-
+            Directory.CreateDirectory(Path.GetDirectoryName(dirNameParque) ?? string.Empty);
             if (File.Exists(dirNameParque))
                 File.Delete(dirNameParque);
 
-            using (FileStream fs = File.OpenWrite(dirNameParque))
+            using (var fs = File.OpenWrite(dirNameParque))
             {
-                using (ParquetWriter writer = ParquetWriter.CreateAsync(schema, fs).Result)
+                using (var writer = ParquetWriter.CreateAsync(schema, fs).Result)
                 {
-                    using (ParquetRowGroupWriter groupWriter = writer.CreateRowGroup())
+                    using (var groupWriter = writer.CreateRowGroup())
                     {
-                        foreach (var item in arrDataColum)
-                            groupWriter.WriteColumnAsync(item);
+                        foreach (var column in arrDataColum)
+                        {
+                            groupWriter.WriteColumnAsync(column).Wait();
+                        }
                     }
                 }
             }
 
             return true;
         }
+
         public class Obj
         {
             public Obj(int sequence, string nomeFile, DateTime data)
             {
-                this.sequence = sequence;
-                this.nomeFile = nomeFile;
-                this.data = data;
+                Sequence = sequence;
+                NomeFile = nomeFile;
+                Data = data;
             }
 
             [JsonProperty("NUMSEQ")]
-            public int sequence { get; set; }
+            public int Sequence { get; set; }
             [JsonProperty("NOME")]
-            public string nomeFile { get; set; }
+            public string NomeFile { get; set; }
             [JsonProperty("DATA")]
-            public DateTime data { get; set; }
+            public DateTime Data { get; set; }
         }
 
         public static void Main(string[] args)
@@ -156,14 +142,13 @@ namespace ObjToParquet
             try
             {
                 string fileNameParque = "arquivoName.parquet";
-                
-                bool sucesso = EscreveArquivoParquet(new List<Obj>() { new Obj(1, "a", DateTime.Now) }, Path.Combine(Directory.GetCurrentDirectory(), fileNameParque));
+                var filePath = Path.Combine(Directory.GetCurrentDirectory(), fileNameParque);
+                EscreveArquivoParquet(new List<Obj> { new Obj(1, "a", DateTime.Now) }, filePath);
             }
             catch (Exception ex)
             {
-                throw ex;
+                Console.Error.WriteLine($"Error: {ex.Message}");
             }
         }
-
     }
 }
